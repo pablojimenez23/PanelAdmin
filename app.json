@@ -8,6 +8,9 @@
     "scheme": "paneladmin",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "devServer": {
+      "port": 8084
+    },
     "ios": {
       "supportsTablet": true
     },
