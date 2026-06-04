@@ -1,38 +1,38 @@
-import { useMemo, useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  StatusBar,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 
+// ⚠️ Si usas dispositivo físico, cambia por tu IP local: "http://192.168.X.X:8080"
+// Si usas emulador Android: "http://10.0.2.2:8080"
+const API_URL = "http://10.47.19.155:8080";
+
 interface Usuario {
-  nombre: string;
-  correo: string;
-  fechaCreacion: string;
-  rol: "Admin" | "Usuario";
+  id: number;
+  username: string;
+  email: string;
+  role: "USER" | "ADMIN";
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 type OrdenFiltro = "az" | "za" | "reciente" | "antiguo";
 
-const USUARIOS_INICIALES: Usuario[] = [
-  { nombre: "Ana García",      correo: "ana.garcia@ejemplo.com",      fechaCreacion: "2024-01-15T10:30:00.000Z", rol: "Admin"   },
-  { nombre: "Carlos Mendoza",  correo: "carlos.mendoza@ejemplo.com",  fechaCreacion: "2024-02-28T08:15:00.000Z", rol: "Usuario" },
-  { nombre: "Sofía Ramírez",   correo: "sofia.ramirez@ejemplo.com",   fechaCreacion: "2024-03-10T14:45:00.000Z", rol: "Usuario" },
-  { nombre: "Diego Torres",    correo: "diego.torres@ejemplo.com",    fechaCreacion: "2024-04-05T09:00:00.000Z", rol: "Admin"   },
-  { nombre: "Valentina López", correo: "valentina.lopez@ejemplo.com", fechaCreacion: "2024-05-20T16:20:00.000Z", rol: "Usuario" },
-  { nombre: "Martín Herrera",  correo: "martin.herrera@ejemplo.com",  fechaCreacion: "2024-06-03T11:00:00.000Z", rol: "Usuario" },
-  { nombre: "Isidora Vega",    correo: "isidora.vega@ejemplo.com",    fechaCreacion: "2024-07-18T13:30:00.000Z", rol: "Admin"   },
-];
-
 function formatearFecha(isoString: string): string {
+  if (!isoString) return "-";
   return new Date(isoString).toLocaleDateString("es-CL", {
     day: "2-digit", month: "short", year: "numeric",
   });
@@ -44,115 +44,172 @@ function obtenerIniciales(nombre: string): string {
 
 const COLORES_AVATAR = ["#3498db","#2ecc71","#e67e22","#9b59b6","#e74c3c","#1abc9c","#f39c12"];
 
-function colorAvatar(correo: string): string {
+function colorAvatar(email: string): string {
   let hash = 0;
-  for (let i = 0; i < correo.length; i++) hash = correo.charCodeAt(i) + ((hash << 5) - hash);
+  for (let i = 0; i < email.length; i++) hash = email.charCodeAt(i) + ((hash << 5) - hash);
   return COLORES_AVATAR[Math.abs(hash) % COLORES_AVATAR.length]!;
 }
 
 const OPCIONES_ORDEN: { valor: OrdenFiltro; etiqueta: string }[] = [
-  { valor: "az",       etiqueta: "Nombre A → Z"         },
-  { valor: "za",       etiqueta: "Nombre Z → A"         },
-  { valor: "reciente", etiqueta: "Más reciente"          },
-  { valor: "antiguo",  etiqueta: "Más antiguo"           },
+  { valor: "az",       etiqueta: "A → Z"       },
+  { valor: "za",       etiqueta: "Z → A"       },
+  { valor: "reciente", etiqueta: "Más reciente" },
+  { valor: "antiguo",  etiqueta: "Más antiguo"  },
 ];
 
-export default function AdminUsuariosScreen() {
-  const [usuarios, setUsuarios]                 = useState<Usuario[]>(USUARIOS_INICIALES);
-  const [busqueda, setBusqueda]                 = useState("");
-  const [orden, setOrden]                       = useState<OrdenFiltro>("az");
-  const [filtroRol, setFiltroRol]               = useState<"todos" | "Admin" | "Usuario">("todos");
-  const [modalEdicion, setModalEdicion]         = useState(false);
-  const [usuarioEditando, setUsuarioEditando]   = useState<Usuario | null>(null);
-  const [nombreTemp, setNombreTemp]             = useState("");
-  const [correoTemp, setCorreoTemp]             = useState("");
-  const [rolTemp, setRolTemp]                   = useState<"Admin" | "Usuario">("Usuario");
-  const [modalEliminar, setModalEliminar]       = useState(false);
+// Recibe el token JWT desde la pantalla de login
+export default function AdminPanel({ token }: { token: string }) {
+  const [usuarios, setUsuarios]               = useState<Usuario[]>([]);
+  const [cargando, setCargando]               = useState(true);
+  const [busqueda, setBusqueda]               = useState("");
+  const [orden, setOrden]                     = useState<OrdenFiltro>("az");
+  const [filtroRol, setFiltroRol]             = useState<"todos" | "USER" | "ADMIN">("todos");
+  const [modalEdicion, setModalEdicion]       = useState(false);
+  const [usuarioEditando, setUsuarioEditando] = useState<Usuario | null>(null);
+  const [usernameTemp, setUsernameTemp]       = useState("");
+  const [emailTemp, setEmailTemp]             = useState("");
+  const [rolTemp, setRolTemp]                 = useState<"USER" | "ADMIN">("USER");
+  const [guardando, setGuardando]             = useState(false);
+  const [modalEliminar, setModalEliminar]     = useState(false);
   const [usuarioAEliminar, setUsuarioAEliminar] = useState<Usuario | null>(null);
-  const [motivoEliminar, setMotivoEliminar]     = useState("");
+  const [eliminando, setEliminando]           = useState(false);
 
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`,
+  };
+
+  // ── Cargar usuarios ──────────────────────────────────────────────────────
+  async function cargarUsuarios() {
+    setCargando(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setUsuarios(data.users ?? []);
+    } catch (e) {
+      Alert.alert("Error", "No se pudo cargar la lista de usuarios.");
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  useEffect(() => { cargarUsuarios(); }, []);
+
+  // ── Filtrado y orden ─────────────────────────────────────────────────────
   const usuariosFiltrados = useMemo(() => {
     const q = busqueda.toLowerCase().trim();
     let lista = [...usuarios];
-    if (q) lista = lista.filter(u => u.nombre.toLowerCase().includes(q) || u.correo.toLowerCase().includes(q));
-    if (filtroRol !== "todos") lista = lista.filter(u => u.rol === filtroRol);
+    if (q) lista = lista.filter(u =>
+      u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+    );
+    if (filtroRol !== "todos") lista = lista.filter(u => u.role === filtroRol);
     lista.sort((a, b) => {
-      if (orden === "az")       return a.nombre.localeCompare(b.nombre, "es");
-      if (orden === "za")       return b.nombre.localeCompare(a.nombre, "es");
-      if (orden === "reciente") return new Date(b.fechaCreacion).getTime() - new Date(a.fechaCreacion).getTime();
-      if (orden === "antiguo")  return new Date(a.fechaCreacion).getTime() - new Date(b.fechaCreacion).getTime();
+      if (orden === "az")       return a.username.localeCompare(b.username, "es");
+      if (orden === "za")       return b.username.localeCompare(a.username, "es");
+      if (orden === "reciente") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (orden === "antiguo")  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       return 0;
     });
     return lista;
   }, [usuarios, busqueda, orden, filtroRol]);
 
-  const totalAdmin   = usuarios.filter(u => u.rol === "Admin").length;
-  const totalUsuario = usuarios.filter(u => u.rol === "Usuario").length;
+  const totalAdmin = usuarios.filter(u => u.role === "ADMIN").length;
+  const totalUser  = usuarios.filter(u => u.role === "USER").length;
 
-  function abrirEdicion(usuario: Usuario) {
-    setUsuarioEditando(usuario);
-    setNombreTemp(usuario.nombre);
-    setCorreoTemp(usuario.correo);
-    setRolTemp(usuario.rol);
+  // ── Editar ───────────────────────────────────────────────────────────────
+  function abrirEdicion(u: Usuario) {
+    setUsuarioEditando(u);
+    setUsernameTemp(u.username);
+    setEmailTemp(u.email);
+    setRolTemp(u.role);
     setModalEdicion(true);
   }
 
   function cerrarEdicion() {
     setModalEdicion(false);
     setUsuarioEditando(null);
-    setNombreTemp("");
-    setCorreoTemp("");
-    setRolTemp("Usuario");
+    setUsernameTemp("");
+    setEmailTemp("");
+    setRolTemp("USER");
   }
 
-  function guardarCambios() {
-    if (!nombreTemp.trim() || !correoTemp.trim() || !correoTemp.includes("@")) return;
-    setUsuarios(prev => prev.map(u =>
-      u.correo === usuarioEditando?.correo
-        ? { ...u, nombre: nombreTemp.trim(), correo: correoTemp.trim().toLowerCase(), rol: rolTemp }
-        : u
-    ));
-    cerrarEdicion();
+  async function guardarCambios() {
+    if (!usernameTemp.trim() || !emailTemp.trim() || !emailTemp.includes("@")) {
+      Alert.alert("Validación", "Completa todos los campos correctamente.");
+      return;
+    }
+    setGuardando(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${usuarioEditando!.id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          username: usernameTemp.trim(),
+          email: emailTemp.trim().toLowerCase(),
+          role: rolTemp,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      await cargarUsuarios();
+      cerrarEdicion();
+    } catch {
+      Alert.alert("Error", "No se pudo actualizar el usuario.");
+    } finally {
+      setGuardando(false);
+    }
   }
 
-  function abrirEliminar(usuario: Usuario) {
-    setUsuarioAEliminar(usuario);
-    setMotivoEliminar("");
+  // ── Eliminar ─────────────────────────────────────────────────────────────
+  function abrirEliminar(u: Usuario) {
+    setUsuarioAEliminar(u);
     setModalEliminar(true);
   }
 
   function cerrarEliminar() {
     setModalEliminar(false);
     setUsuarioAEliminar(null);
-    setMotivoEliminar("");
   }
 
-  function ejecutarEliminacion() {
-    setUsuarios(prev => prev.filter(u => u.correo !== usuarioAEliminar?.correo));
-    cerrarEliminar();
+  async function ejecutarEliminacion() {
+    setEliminando(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${usuarioAEliminar!.id}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!res.ok) throw new Error();
+      await cargarUsuarios();
+      cerrarEliminar();
+    } catch {
+      Alert.alert("Error", "No se pudo eliminar el usuario.");
+    } finally {
+      setEliminando(false);
+    }
   }
 
+  // ── Tarjeta usuario ──────────────────────────────────────────────────────
   function TarjetaUsuario({ item }: { item: Usuario }) {
-    const color   = colorAvatar(item.correo);
-    const esAdmin = item.rol === "Admin";
+    const color   = colorAvatar(item.email);
+    const esAdmin = item.role === "ADMIN";
     return (
       <View style={estilos.tarjeta}>
         <View style={[estilos.tarjetaBarra, { backgroundColor: color }]} />
         <View style={[estilos.avatar, { backgroundColor: color + "22" }]}>
-          <Text style={[estilos.avatarTexto, { color }]}>{obtenerIniciales(item.nombre)}</Text>
+          <Text style={[estilos.avatarTexto, { color }]}>{obtenerIniciales(item.username)}</Text>
         </View>
         <View style={estilos.tarjetaInfo}>
           <View style={estilos.nombreFila}>
-            <Text style={estilos.tarjetaNombre} numberOfLines={1}>{item.nombre}</Text>
-            <View style={[estilos.rolBadge, esAdmin ? estilos.rolBadgeAdmin : estilos.rolBadgeUsuario]}>
-              <Text style={[estilos.rolBadgeTexto, esAdmin ? estilos.rolBadgeTextoAdmin : estilos.rolBadgeTextoUsuario]}>
-                {item.rol}
+            <Text style={estilos.tarjetaNombre} numberOfLines={1}>{item.username}</Text>
+            <View style={[estilos.rolBadge, esAdmin ? estilos.rolBadgeAdmin : estilos.rolBadgeUser]}>
+              <Text style={[estilos.rolBadgeTexto, esAdmin ? estilos.rolTextoAdmin : estilos.rolTextoUser]}>
+                {item.role}
               </Text>
             </View>
           </View>
-          <Text style={estilos.tarjetaCorreo} numberOfLines={1}>{item.correo}</Text>
+          <Text style={estilos.tarjetaCorreo} numberOfLines={1}>{item.email}</Text>
           <View style={[estilos.fechaBadge, { backgroundColor: color + "15" }]}>
-            <Text style={[estilos.tarjetaFecha, { color }]}>{formatearFecha(item.fechaCreacion)}</Text>
+            <Text style={[estilos.tarjetaFecha, { color }]}>{formatearFecha(item.createdAt)}</Text>
           </View>
         </View>
         <View style={estilos.acciones}>
@@ -167,20 +224,22 @@ export default function AdminUsuariosScreen() {
     );
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <View style={estilos.contenedor}>
       <StatusBar barStyle="light-content" backgroundColor="#3498db" />
 
-      {/* ── Header ── */}
+      {/* Header */}
       <View style={estilos.header}>
         <View style={estilos.circulo1} />
         <View style={estilos.circulo2} />
+
         <Text style={estilos.titulo}>Gestión de usuarios</Text>
         <Text style={estilos.subtitulo}>
           {usuariosFiltrados.length} de {usuarios.length} usuarios registrados
         </Text>
 
-        {/* Estadísticas de roles */}
+        {/* Stats */}
         <View style={estilos.statsRow}>
           <View style={estilos.statBox}>
             <Text style={estilos.statNum}>{totalAdmin}</Text>
@@ -188,9 +247,14 @@ export default function AdminUsuariosScreen() {
           </View>
           <View style={estilos.statDivider} />
           <View style={estilos.statBox}>
-            <Text style={estilos.statNum}>{totalUsuario}</Text>
+            <Text style={estilos.statNum}>{totalUser}</Text>
             <Text style={estilos.statLabel}>Usuarios</Text>
           </View>
+          <View style={estilos.statDivider} />
+          <TouchableOpacity style={estilos.statBox} onPress={cargarUsuarios} activeOpacity={0.7}>
+            <Text style={estilos.statNum}>↺</Text>
+            <Text style={estilos.statLabel}>Recargar</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Buscador */}
@@ -213,11 +277,10 @@ export default function AdminUsuariosScreen() {
         </View>
       </View>
 
-      {/* ── Chips filtro rol + orden ── */}
+      {/* Chips */}
       <View style={estilos.chipsWrapper}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={estilos.chipsContenedor} bounces={false}>
-          {/* Filtro por rol */}
-          {(["todos", "Admin", "Usuario"] as const).map((r) => (
+          {(["todos", "ADMIN", "USER"] as const).map((r) => (
             <TouchableOpacity
               key={r}
               style={[estilos.chip, filtroRol === r && estilos.chipActivoVerde]}
@@ -229,10 +292,7 @@ export default function AdminUsuariosScreen() {
               </Text>
             </TouchableOpacity>
           ))}
-
           <View style={estilos.chipSeparador} />
-
-          {/* Orden */}
           {OPCIONES_ORDEN.map((op) => (
             <TouchableOpacity
               key={op.valor}
@@ -248,24 +308,31 @@ export default function AdminUsuariosScreen() {
         </ScrollView>
       </View>
 
-      {/* ── Lista ── */}
-      <FlatList
-        data={usuariosFiltrados}
-        keyExtractor={(item) => item.correo}
-        renderItem={({ item }) => <TarjetaUsuario item={item} />}
-        contentContainerStyle={estilos.lista}
-        showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-        ListEmptyComponent={
-          <View style={estilos.vacio}>
-            <Text style={estilos.vacioTexto}>
-              {busqueda ? "Sin resultados para esa búsqueda." : "No hay usuarios registrados."}
-            </Text>
-          </View>
-        }
-      />
+      {/* Lista */}
+      {cargando ? (
+        <View style={estilos.cargandoContenedor}>
+          <ActivityIndicator size="large" color="#3498db" />
+          <Text style={estilos.cargandoTexto}>Cargando usuarios...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={usuariosFiltrados}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => <TarjetaUsuario item={item} />}
+          contentContainerStyle={estilos.lista}
+          showsVerticalScrollIndicator={false}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ListEmptyComponent={
+            <View style={estilos.vacio}>
+              <Text style={estilos.vacioTexto}>
+                {busqueda ? "Sin resultados para esa búsqueda." : "No hay usuarios registrados."}
+              </Text>
+            </View>
+          }
+        />
+      )}
 
-      {/* ══ Modal — Editar ══ */}
+      {/* Modal Editar */}
       <Modal visible={modalEdicion} transparent animationType="slide" onRequestClose={cerrarEdicion}>
         <KeyboardAvoidingView style={estilos.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <View style={estilos.modalContenedor}>
@@ -273,28 +340,28 @@ export default function AdminUsuariosScreen() {
             <Text style={estilos.modalTitulo}>Editar usuario</Text>
 
             {usuarioEditando && (
-              <View style={[estilos.modalAvatarFila, { borderLeftColor: colorAvatar(usuarioEditando.correo), borderLeftWidth: 3 }]}>
-                <View style={[estilos.modalAvatar, { backgroundColor: colorAvatar(usuarioEditando.correo) + "22" }]}>
-                  <Text style={[estilos.modalAvatarTexto, { color: colorAvatar(usuarioEditando.correo) }]}>
-                    {obtenerIniciales(nombreTemp || usuarioEditando.nombre)}
+              <View style={[estilos.modalAvatarFila, { borderLeftColor: colorAvatar(usuarioEditando.email), borderLeftWidth: 3 }]}>
+                <View style={[estilos.modalAvatar, { backgroundColor: colorAvatar(usuarioEditando.email) + "22" }]}>
+                  <Text style={[estilos.modalAvatarTexto, { color: colorAvatar(usuarioEditando.email) }]}>
+                    {obtenerIniciales(usernameTemp || usuarioEditando.username)}
                   </Text>
                 </View>
                 <View>
                   <Text style={estilos.modalFechaLabel}>Cuenta creada el</Text>
-                  <Text style={estilos.modalFechaValor}>{formatearFecha(usuarioEditando.fechaCreacion)}</Text>
+                  <Text style={estilos.modalFechaValor}>{formatearFecha(usuarioEditando.createdAt)}</Text>
                 </View>
               </View>
             )}
 
             <View style={estilos.campoContenedor}>
-              <Text style={estilos.campoEtiqueta}>Nombre completo</Text>
+              <Text style={estilos.campoEtiqueta}>Nombre de usuario</Text>
               <TextInput
                 style={estilos.campoInput}
-                placeholder="Nombre del usuario"
+                placeholder="username"
                 placeholderTextColor="#AAAAAA"
-                value={nombreTemp}
-                onChangeText={setNombreTemp}
-                autoCapitalize="words"
+                value={usernameTemp}
+                onChangeText={setUsernameTemp}
+                autoCapitalize="none"
                 returnKeyType="next"
               />
             </View>
@@ -305,8 +372,8 @@ export default function AdminUsuariosScreen() {
                 style={estilos.campoInput}
                 placeholder="correo@ejemplo.com"
                 placeholderTextColor="#AAAAAA"
-                value={correoTemp}
-                onChangeText={setCorreoTemp}
+                value={emailTemp}
+                onChangeText={setEmailTemp}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -314,33 +381,35 @@ export default function AdminUsuariosScreen() {
               />
             </View>
 
-            {/* Selector de rol */}
             <View style={estilos.campoContenedor}>
-              <Text style={estilos.campoEtiqueta}>Rol del usuario</Text>
+              <Text style={estilos.campoEtiqueta}>Rol</Text>
               <View style={estilos.rolSelector}>
                 <TouchableOpacity
-                  style={[estilos.rolOpcion, rolTemp === "Admin" && estilos.rolOpcionActivaAdmin]}
-                  onPress={() => setRolTemp("Admin")}
+                  style={[estilos.rolOpcion, rolTemp === "ADMIN" && estilos.rolOpcionActivaAdmin]}
+                  onPress={() => setRolTemp("ADMIN")}
                   activeOpacity={0.8}
                 >
-                  <Text style={[estilos.rolOpcionTexto, rolTemp === "Admin" && estilos.rolOpcionTextoActivo]}>
-                    👑 Admin
+                  <Text style={[estilos.rolOpcionTexto, rolTemp === "ADMIN" && estilos.rolOpcionTextoActivo]}>
+                    👑 ADMIN
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[estilos.rolOpcion, rolTemp === "Usuario" && estilos.rolOpcionActivaUsuario]}
-                  onPress={() => setRolTemp("Usuario")}
+                  style={[estilos.rolOpcion, rolTemp === "USER" && estilos.rolOpcionActivaUser]}
+                  onPress={() => setRolTemp("USER")}
                   activeOpacity={0.8}
                 >
-                  <Text style={[estilos.rolOpcionTexto, rolTemp === "Usuario" && estilos.rolOpcionTextoActivo]}>
-                    👤 Usuario
+                  <Text style={[estilos.rolOpcionTexto, rolTemp === "USER" && estilos.rolOpcionTextoActivo]}>
+                    👤 USER
                   </Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            <TouchableOpacity style={estilos.botonPrimario} onPress={guardarCambios} activeOpacity={0.85}>
-              <Text style={estilos.botonPrimarioTexto}>Guardar cambios</Text>
+            <TouchableOpacity style={estilos.botonPrimario} onPress={guardarCambios} activeOpacity={0.85} disabled={guardando}>
+              {guardando
+                ? <ActivityIndicator color="#FFFFFF" />
+                : <Text style={estilos.botonPrimarioTexto}>Guardar cambios</Text>
+              }
             </TouchableOpacity>
             <TouchableOpacity style={estilos.botonSecundario} onPress={cerrarEdicion} activeOpacity={0.8}>
               <Text style={estilos.botonSecundarioTexto}>Cancelar</Text>
@@ -349,9 +418,9 @@ export default function AdminUsuariosScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ══ Modal — Eliminar ══ */}
+      {/* Modal Eliminar */}
       <Modal visible={modalEliminar} transparent animationType="slide" onRequestClose={cerrarEliminar}>
-        <KeyboardAvoidingView style={estilos.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <View style={estilos.modalOverlay}>
           <View style={estilos.modalContenedor}>
             <View style={estilos.modalHandle} />
             <View style={estilos.eliminarIconoBg}>
@@ -361,33 +430,21 @@ export default function AdminUsuariosScreen() {
             {usuarioAEliminar && (
               <Text style={estilos.eliminarSubtitulo}>
                 Estás a punto de eliminar a{" "}
-                <Text style={estilos.eliminarNombre}>{usuarioAEliminar.nombre}</Text>
-                {" "}({usuarioAEliminar.rol}). Esta acción no se puede deshacer.
+                <Text style={estilos.eliminarNombre}>{usuarioAEliminar.username}</Text>
+                {" "}({usuarioAEliminar.role}). Esta acción no se puede deshacer.
               </Text>
             )}
-            <View style={estilos.campoContenedor}>
-              <Text style={estilos.campoEtiqueta}>
-                Motivo{"  "}<Text style={estilos.motivoOpcional}>(opcional)</Text>
-              </Text>
-              <TextInput
-                style={[estilos.campoInput, estilos.motivoInput]}
-                placeholder="Ej: cuenta duplicada, solicitud del usuario..."
-                placeholderTextColor="#AAAAAA"
-                value={motivoEliminar}
-                onChangeText={setMotivoEliminar}
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-              />
-            </View>
-            <TouchableOpacity style={estilos.botonEliminar} onPress={ejecutarEliminacion} activeOpacity={0.85}>
-              <Text style={estilos.botonPrimarioTexto}>Sí, eliminar usuario</Text>
+            <TouchableOpacity style={estilos.botonEliminar} onPress={ejecutarEliminacion} activeOpacity={0.85} disabled={eliminando}>
+              {eliminando
+                ? <ActivityIndicator color="#FFFFFF" />
+                : <Text style={estilos.botonPrimarioTexto}>Sí, eliminar usuario</Text>
+              }
             </TouchableOpacity>
             <TouchableOpacity style={estilos.botonSecundario} onPress={cerrarEliminar} activeOpacity={0.8}>
               <Text style={estilos.botonSecundarioTexto}>Cancelar</Text>
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
     </View>
   );
@@ -395,71 +452,61 @@ export default function AdminUsuariosScreen() {
 
 const estilos = StyleSheet.create({
   contenedor: { flex: 1, backgroundColor: "#EEF4FB" },
-  header: {
-    backgroundColor: "#3498db",
-    paddingHorizontal: 24,
-    paddingTop: Platform.OS === "ios" ? 60 : 40,
-    paddingBottom: 28,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-    overflow: "hidden",
-    shadowColor: "#2980b9",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  circulo1: { position: "absolute", width: 180, height: 180, borderRadius: 90, backgroundColor: "rgba(255,255,255,0.08)", top: -50, right: -40 },
-  circulo2: { position: "absolute", width: 100, height: 100, borderRadius: 50, backgroundColor: "rgba(255,255,255,0.06)", bottom: -20, left: 20 },
-  titulo:   { fontSize: 26, fontWeight: "800", color: "#FFFFFF", marginBottom: 4 },
-  subtitulo:{ fontSize: 14, color: "rgba(255,255,255,0.8)", marginBottom: 14, fontWeight: "500" },
+  header:     { backgroundColor: "#3498db", paddingHorizontal: 24, paddingTop: Platform.OS === "ios" ? 60 : 40, paddingBottom: 28, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, overflow: "hidden", shadowColor: "#2980b9", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8 },
+  circulo1:   { position: "absolute", width: 180, height: 180, borderRadius: 90, backgroundColor: "rgba(255,255,255,0.08)", top: -50, right: -40 },
+  circulo2:   { position: "absolute", width: 100, height: 100, borderRadius: 50, backgroundColor: "rgba(255,255,255,0.06)", bottom: -20, left: 20 },
+  titulo:     { fontSize: 24, fontWeight: "800", color: "#FFFFFF", marginBottom: 4 },
+  subtitulo:  { fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 14, fontWeight: "500" },
 
   statsRow:    { flexDirection: "row", alignItems: "center", backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 12, padding: 12, marginBottom: 16 },
   statBox:     { flex: 1, alignItems: "center" },
-  statNum:     { fontSize: 22, fontWeight: "800", color: "#FFFFFF" },
-  statLabel:   { fontSize: 12, color: "rgba(255,255,255,0.8)", fontWeight: "500" },
+  statNum:     { fontSize: 20, fontWeight: "800", color: "#FFFFFF" },
+  statLabel:   { fontSize: 11, color: "rgba(255,255,255,0.8)", fontWeight: "500" },
   statDivider: { width: 1, height: 32, backgroundColor: "rgba(255,255,255,0.3)" },
 
   inputContenedor: { flexDirection: "row", alignItems: "center", backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 14, paddingHorizontal: 14, height: 48, borderWidth: 1, borderColor: "rgba(255,255,255,0.3)" },
-  lupita:      { fontSize: 15, marginRight: 8 },
-  input:       { flex: 1, fontSize: 14, color: "#FFFFFF" },
-  limpiarTexto:{ fontSize: 14, color: "rgba(255,255,255,0.7)" },
+  lupita:          { fontSize: 15, marginRight: 8 },
+  input:           { flex: 1, fontSize: 14, color: "#FFFFFF" },
+  limpiarTexto:    { fontSize: 14, color: "rgba(255,255,255,0.7)" },
 
-  chipsWrapper:    { paddingVertical: 14, paddingHorizontal: 16 },
-  chipsContenedor: { gap: 8, alignItems: "center" },
-  chip:            { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: "#FFFFFF", borderWidth: 1.5, borderColor: "#D6E8F7" },
-  chipActivo:      { backgroundColor: "#3498db", borderColor: "#2980b9" },
-  chipActivoVerde: { backgroundColor: "#27ae60", borderColor: "#1e8449" },
+  chipsWrapper:         { paddingVertical: 14, paddingHorizontal: 16 },
+  chipsContenedor:      { gap: 8, alignItems: "center" },
+  chip:                 { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: "#FFFFFF", borderWidth: 1.5, borderColor: "#D6E8F7" },
+  chipActivo:           { backgroundColor: "#3498db", borderColor: "#2980b9" },
+  chipActivoVerde:      { backgroundColor: "#27ae60", borderColor: "#1e8449" },
   chipTexto:            { fontSize: 13, fontWeight: "600", color: "#3498db" },
   chipTextoActivo:      { color: "#FFFFFF" },
   chipTextoActivoVerde: { color: "#FFFFFF" },
-  chipSeparador:   { width: 1, height: 28, backgroundColor: "#D6E8F7", marginHorizontal: 4 },
+  chipSeparador:        { width: 1, height: 28, backgroundColor: "#D6E8F7", marginHorizontal: 4 },
+
+  cargandoContenedor: { flex: 1, alignItems: "center", justifyContent: "center" },
+  cargandoTexto:      { marginTop: 12, fontSize: 14, color: "#888888" },
 
   lista: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 40 },
 
-  tarjeta: { backgroundColor: "#FFFFFF", borderRadius: 16, padding: 14, flexDirection: "row", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3, overflow: "hidden" },
+  tarjeta:      { backgroundColor: "#FFFFFF", borderRadius: 16, padding: 14, flexDirection: "row", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3, overflow: "hidden" },
   tarjetaBarra: { position: "absolute", left: 0, top: 0, bottom: 0, width: 4, borderTopLeftRadius: 16, borderBottomLeftRadius: 16 },
-  avatar:      { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", marginRight: 12, marginLeft: 8, flexShrink: 0 },
-  avatarTexto: { fontSize: 16, fontWeight: "800" },
-  tarjetaInfo: { flex: 1, marginRight: 10 },
-  nombreFila:  { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2, flexWrap: "wrap" },
-  tarjetaNombre:  { fontSize: 15, fontWeight: "700", color: "#1A1A1A" },
-  tarjetaCorreo:  { fontSize: 12, color: "#888888", marginBottom: 6 },
-  fechaBadge:     { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  tarjetaFecha:   { fontSize: 11, fontWeight: "600" },
+  avatar:       { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", marginRight: 12, marginLeft: 8, flexShrink: 0 },
+  avatarTexto:  { fontSize: 16, fontWeight: "800" },
+  tarjetaInfo:  { flex: 1, marginRight: 10 },
+  nombreFila:   { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2, flexWrap: "wrap" },
+  tarjetaNombre:{ fontSize: 15, fontWeight: "700", color: "#1A1A1A" },
+  tarjetaCorreo:{ fontSize: 12, color: "#888888", marginBottom: 6 },
+  fechaBadge:   { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  tarjetaFecha: { fontSize: 11, fontWeight: "600" },
 
-  rolBadge:            { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  rolBadgeAdmin:       { backgroundColor: "#EBF5FB", borderWidth: 1, borderColor: "#BEE3F8" },
-  rolBadgeUsuario:     { backgroundColor: "#F2F3F4", borderWidth: 1, borderColor: "#D5D8DC" },
-  rolBadgeTexto:       { fontSize: 11, fontWeight: "700" },
-  rolBadgeTextoAdmin:  { color: "#2980b9" },
-  rolBadgeTextoUsuario:{ color: "#717D7E" },
+  rolBadge:      { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  rolBadgeAdmin: { backgroundColor: "#EBF5FB", borderWidth: 1, borderColor: "#BEE3F8" },
+  rolBadgeUser:  { backgroundColor: "#F2F3F4", borderWidth: 1, borderColor: "#D5D8DC" },
+  rolBadgeTexto: { fontSize: 11, fontWeight: "700" },
+  rolTextoAdmin: { color: "#2980b9" },
+  rolTextoUser:  { color: "#717D7E" },
 
-  acciones:              { flexDirection: "column", gap: 6 },
-  botonEditar:           { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EBF5FB", borderWidth: 1, borderColor: "#BEE3F8" },
-  botonEditarTexto:      { fontSize: 12, fontWeight: "700", color: "#3498db" },
-  botonEliminarTarjeta:  { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: "#FDEDEC", borderWidth: 1, borderColor: "#FADBD8" },
-  botonEliminarTarjetaTexto: { fontSize: 12, fontWeight: "700", color: "#e74c3c" },
+  acciones:                 { flexDirection: "column", gap: 6 },
+  botonEditar:              { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EBF5FB", borderWidth: 1, borderColor: "#BEE3F8" },
+  botonEditarTexto:         { fontSize: 12, fontWeight: "700", color: "#3498db" },
+  botonEliminarTarjeta:     { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: "#FDEDEC", borderWidth: 1, borderColor: "#FADBD8" },
+  botonEliminarTarjetaTexto:{ fontSize: 12, fontWeight: "700", color: "#e74c3c" },
 
   vacio:     { paddingTop: 60, alignItems: "center" },
   vacioTexto:{ fontSize: 15, color: "#AAAAAA", textAlign: "center" },
@@ -478,23 +525,21 @@ const estilos = StyleSheet.create({
   campoEtiqueta:   { fontSize: 13, fontWeight: "600", color: "#444444", marginBottom: 6 },
   campoInput:      { height: 48, borderWidth: 1.5, borderColor: "#E8E8E8", borderRadius: 12, paddingHorizontal: 14, fontSize: 14, color: "#1A1A1A", backgroundColor: "#F8F9FA" },
 
-  rolSelector:          { flexDirection: "row", gap: 10 },
-  rolOpcion:            { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: "#E8E8E8", alignItems: "center", justifyContent: "center", backgroundColor: "#F8F9FA" },
-  rolOpcionActivaAdmin: { backgroundColor: "#EBF5FB", borderColor: "#3498db" },
-  rolOpcionActivaUsuario:{ backgroundColor: "#F2F3F4", borderColor: "#7F8C8D" },
-  rolOpcionTexto:       { fontSize: 14, fontWeight: "600", color: "#AAAAAA" },
-  rolOpcionTextoActivo: { color: "#1A1A1A" },
+  rolSelector:           { flexDirection: "row", gap: 10 },
+  rolOpcion:             { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: "#E8E8E8", alignItems: "center", justifyContent: "center", backgroundColor: "#F8F9FA" },
+  rolOpcionActivaAdmin:  { backgroundColor: "#EBF5FB", borderColor: "#3498db" },
+  rolOpcionActivaUser:   { backgroundColor: "#F2F3F4", borderColor: "#7F8C8D" },
+  rolOpcionTexto:        { fontSize: 14, fontWeight: "600", color: "#AAAAAA" },
+  rolOpcionTextoActivo:  { color: "#1A1A1A" },
 
-  eliminarIconoBg:  { width: 64, height: 64, borderRadius: 32, backgroundColor: "#FDEDEC", alignItems: "center", justifyContent: "center", alignSelf: "center", marginBottom: 16 },
-  eliminarIcono:    { fontSize: 28 },
-  eliminarSubtitulo:{ fontSize: 14, color: "#666666", lineHeight: 22, marginBottom: 20 },
-  eliminarNombre:   { fontWeight: "700", color: "#1A1A1A" },
-  motivoOpcional:   { fontSize: 12, fontWeight: "400", color: "#AAAAAA" },
-  motivoInput:      { height: undefined, minHeight: 80, paddingTop: 12 },
+  eliminarIconoBg:   { width: 64, height: 64, borderRadius: 32, backgroundColor: "#FDEDEC", alignItems: "center", justifyContent: "center", alignSelf: "center", marginBottom: 16 },
+  eliminarIcono:     { fontSize: 28 },
+  eliminarSubtitulo: { fontSize: 14, color: "#666666", lineHeight: 22, marginBottom: 20 },
+  eliminarNombre:    { fontWeight: "700", color: "#1A1A1A" },
 
-  botonPrimario:      { height: 52, backgroundColor: "#3498db", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
-  botonPrimarioTexto: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
-  botonEliminar:      { height: 52, backgroundColor: "#e74c3c", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
-  botonSecundario:    { height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  botonPrimario:       { height: 52, backgroundColor: "#3498db", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  botonPrimarioTexto:  { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  botonEliminar:       { height: 52, backgroundColor: "#e74c3c", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  botonSecundario:     { height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   botonSecundarioTexto:{ fontSize: 15, fontWeight: "600", color: "#3498db" },
 });
