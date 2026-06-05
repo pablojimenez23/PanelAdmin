@@ -26,6 +26,15 @@ async function fetchConTimeout(url: string, opciones: RequestInit, ms: number) {
   }
 }
 
+// Decodifica el payload del token JWT sin librería externa
+function decodificarToken(token: string): any {
+  try {
+    return JSON.parse(atob(token.split(".")[1]));
+  } catch {
+    return null;
+  }
+}
+
 export default function LoginScreen() {
   const router = useRouter();
   const [correo, setCorreo]     = useState("");
@@ -50,7 +59,9 @@ export default function LoginScreen() {
         },
         TIMEOUT_MS
       );
+
       const datos = await res.json();
+
       if (res.status === 401 || res.status === 403) {
         setError("Credenciales incorrectas. Verifica tu usuario y contraseña.");
         return;
@@ -67,11 +78,16 @@ export default function LoginScreen() {
         setError(datos.message || "Error al iniciar sesión.");
         return;
       }
-      if (datos.role !== "ADMIN") {
+
+      // El rol viene en el payload del JWT, no en el body de la respuesta
+      const payload = decodificarToken(datos.token);
+      if (!payload || payload.role !== "ADMIN") {
         setError("Acceso denegado. Solo los administradores pueden acceder.");
         return;
       }
+
       router.replace({ pathname: "/(tabs)", params: { token: datos.token } });
+
     } catch (e: any) {
       if (e?.name === "AbortError") {
         setError("Tiempo de espera agotado. Verifica tu conexión e intenta de nuevo.");
