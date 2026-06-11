@@ -66,18 +66,29 @@ export default function AdminPanel() {
   const [filtroRol, setFiltroRol]               = useState<"todos" | "USER" | "ADMIN">("todos");
   const [modalEdicion, setModalEdicion]         = useState(false);
   const [usuarioEditando, setUsuarioEditando]   = useState<Usuario | null>(null);
-  const [usernameTemp, setUsernameTemp]         = useState("");
-  const [emailTemp, setEmailTemp]               = useState("");
   const [rolTemp, setRolTemp]                   = useState<"USER" | "ADMIN">("USER");
   const [guardando, setGuardando]               = useState(false);
   const [modalEliminar, setModalEliminar]       = useState(false);
   const [usuarioAEliminar, setUsuarioAEliminar] = useState<Usuario | null>(null);
   const [eliminando, setEliminando]             = useState(false);
+  const [emailAdmin, setEmailAdmin]             = useState("");
 
-  // Si no hay token redirige al login
+  // Si no hay token redirige al login, si hay decodifica el correo del admin
   useEffect(() => {
     if (!token) router.replace("/login" as any);
+    else {
+      try {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        setEmailAdmin(payload.sub ?? "");
+      } catch {}
+    }
   }, [token]);
+
+  // Username del admin logueado, buscado dentro de la lista de usuarios cargada
+  const usernameAdmin = useMemo(() => {
+    const encontrado = usuarios.find(u => u.email === emailAdmin);
+    return encontrado?.username ?? emailAdmin;
+  }, [usuarios, emailAdmin]);
 
   const headers = {
     "Content-Type": "application/json",
@@ -136,11 +147,9 @@ export default function AdminPanel() {
   const totalAdmin = usuarios.filter(u => u.role === "ADMIN").length;
   const totalUser  = usuarios.filter(u => u.role === "USER").length;
 
-  // Abre modal de edicion con datos del usuario seleccionado
+  // Abre modal de edicion con datos del usuario seleccionado (solo rol)
   function abrirEdicion(u: Usuario) {
     setUsuarioEditando(u);
-    setUsernameTemp(u.username);
-    setEmailTemp(u.email);
     setRolTemp(u.role);
     setModalEdicion(true);
   }
@@ -148,25 +157,19 @@ export default function AdminPanel() {
   function cerrarEdicion() {
     setModalEdicion(false);
     setUsuarioEditando(null);
-    setUsernameTemp("");
-    setEmailTemp("");
     setRolTemp("USER");
   }
 
-  // Envia PUT al microservicio con los datos editados
+  // Envia PUT al microservicio solo con el rol actualizado
   async function guardarCambios() {
-    if (!usernameTemp.trim() || !emailTemp.trim() || !emailTemp.includes("@")) {
-      Alert.alert("Validación", "Completa todos los campos correctamente.");
-      return;
-    }
     setGuardando(true);
     try {
       const res = await fetch(`${API_URL}/api/admin/users/${usuarioEditando!.id}`, {
         method: "PUT",
         headers,
         body: JSON.stringify({
-          username: usernameTemp.trim(),
-          email: emailTemp.trim().toLowerCase(),
+          username: usuarioEditando!.username,
+          email: usuarioEditando!.email,
           role: rolTemp,
         }),
       });
@@ -242,7 +245,7 @@ export default function AdminPanel() {
         </View>
         <View style={estilos.acciones}>
           <TouchableOpacity style={estilos.botonEditar} onPress={() => abrirEdicion(item)} activeOpacity={0.8}>
-            <Text style={estilos.botonEditarTexto}>Editar</Text>
+            <Text style={estilos.botonEditarTexto}>Editar rol</Text>
           </TouchableOpacity>
           <TouchableOpacity style={estilos.botonEliminarTarjeta} onPress={() => abrirEliminar(item)} activeOpacity={0.8}>
             <Text style={estilos.botonEliminarTarjetaTexto}>Eliminar</Text>
@@ -262,6 +265,7 @@ export default function AdminPanel() {
         <View style={estilos.circulo2} />
         <View style={estilos.headerTop}>
           <View>
+            <Text style={estilos.saludo}>Hola, {usernameAdmin}</Text>
             <Text style={estilos.titulo}>Gestión de usuarios</Text>
             <Text style={estilos.subtitulo}>
               {usuariosFiltrados.length} de {usuarios.length} usuarios registrados
@@ -361,33 +365,25 @@ export default function AdminPanel() {
         />
       )}
 
-      {/* Modal edicion de usuario */}
+      {/* Modal edicion de rol */}
       <Modal visible={modalEdicion} transparent animationType="slide" onRequestClose={cerrarEdicion}>
         <KeyboardAvoidingView style={estilos.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <View style={estilos.modalContenedor}>
             <View style={estilos.modalHandle} />
-            <Text style={estilos.modalTitulo}>Editar usuario</Text>
+            <Text style={estilos.modalTitulo}>Editar rol de usuario</Text>
             {usuarioEditando && (
               <View style={[estilos.modalAvatarFila, { borderLeftColor: colorAvatar(usuarioEditando.email), borderLeftWidth: 3 }]}>
                 <View style={[estilos.modalAvatar, { backgroundColor: colorAvatar(usuarioEditando.email) + "22" }]}>
                   <Text style={[estilos.modalAvatarTexto, { color: colorAvatar(usuarioEditando.email) }]}>
-                    {obtenerIniciales(usernameTemp || usuarioEditando.username)}
+                    {obtenerIniciales(usuarioEditando.username)}
                   </Text>
                 </View>
-                <View>
-                  <Text style={estilos.modalFechaLabel}>Cuenta creada el</Text>
-                  <Text style={estilos.modalFechaValor}>{formatearFecha(usuarioEditando.createdAt)}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={estilos.modalNombreValor} numberOfLines={1}>{usuarioEditando.username}</Text>
+                  <Text style={estilos.modalCorreoValor} numberOfLines={1}>{usuarioEditando.email}</Text>
                 </View>
               </View>
             )}
-            <View style={estilos.campoContenedor}>
-              <Text style={estilos.campoEtiqueta}>Nombre de usuario</Text>
-              <TextInput style={estilos.campoInput} placeholder="username" placeholderTextColor="#AAAAAA" value={usernameTemp} onChangeText={setUsernameTemp} autoCapitalize="none" returnKeyType="next" />
-            </View>
-            <View style={estilos.campoContenedor}>
-              <Text style={estilos.campoEtiqueta}>Correo electrónico</Text>
-              <TextInput style={estilos.campoInput} placeholder="correo@ejemplo.com" placeholderTextColor="#AAAAAA" value={emailTemp} onChangeText={setEmailTemp} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} returnKeyType="done" />
-            </View>
             <View style={estilos.campoContenedor}>
               <Text style={estilos.campoEtiqueta}>Rol</Text>
               <View style={estilos.rolSelector}>
@@ -441,6 +437,7 @@ const estilos = StyleSheet.create({
   circulo1:   { position: "absolute", width: 180, height: 180, borderRadius: 90, backgroundColor: "rgba(255,255,255,0.08)", top: -50, right: -40 },
   circulo2:   { position: "absolute", width: 100, height: 100, borderRadius: 50, backgroundColor: "rgba(255,255,255,0.06)", bottom: -20, left: 20 },
   headerTop:  { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 },
+  saludo:     { fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: "500", marginBottom: 2 },
   titulo:     { fontSize: 24, fontWeight: "800", color: "#FFFFFF", marginBottom: 2 },
   subtitulo:  { fontSize: 13, color: "rgba(255,255,255,0.8)", fontWeight: "500" },
   botonSalir:      { backgroundColor: "rgba(255,255,255,0.2)", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "rgba(255,255,255,0.3)" },
@@ -504,14 +501,13 @@ const estilos = StyleSheet.create({
   modalHandle:     { width: 40, height: 4, backgroundColor: "#E0E0E0", borderRadius: 2, alignSelf: "center", marginBottom: 24 },
   modalTitulo:     { fontSize: 22, fontWeight: "700", color: "#1A1A1A", marginBottom: 16 },
   modalAvatarFila: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 20, backgroundColor: "#F8F9FA", borderRadius: 12, padding: 14 },
-  modalAvatar:     { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  modalAvatar:     { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   modalAvatarTexto:{ fontSize: 16, fontWeight: "700" },
-  modalFechaLabel: { fontSize: 11, color: "#AAAAAA", marginBottom: 2 },
-  modalFechaValor: { fontSize: 14, color: "#1A1A1A", fontWeight: "600" },
+  modalNombreValor:{ fontSize: 15, fontWeight: "700", color: "#1A1A1A" },
+  modalCorreoValor:{ fontSize: 12, color: "#888888", marginTop: 2 },
 
   campoContenedor: { marginBottom: 16 },
   campoEtiqueta:   { fontSize: 13, fontWeight: "600", color: "#444444", marginBottom: 6 },
-  campoInput:      { height: 48, borderWidth: 1.5, borderColor: "#E8E8E8", borderRadius: 12, paddingHorizontal: 14, fontSize: 14, color: "#1A1A1A", backgroundColor: "#F8F9FA" },
 
   rolSelector:          { flexDirection: "row", gap: 10 },
   rolOpcion:            { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: "#E8E8E8", alignItems: "center", justifyContent: "center", backgroundColor: "#F8F9FA" },
@@ -526,6 +522,6 @@ const estilos = StyleSheet.create({
   botonPrimario:       { height: 52, backgroundColor: "#3498db", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
   botonPrimarioTexto:  { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
   botonEliminar:       { height: 52, backgroundColor: "#e74c3c", borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
-  botonSecundario:     { height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  botonSecundarioTexto:{ fontSize: 15, fontWeight: "600", color: "#3498db" },
+  botonSecundario:     { height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#F2F3F4" },
+  botonSecundarioTexto:{ fontSize: 15, fontWeight: "600", color: "#7F8C8D" },
 });
