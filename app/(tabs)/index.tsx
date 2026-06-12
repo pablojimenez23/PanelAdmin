@@ -73,10 +73,17 @@ export default function AdminPanel() {
   const [modalEliminar, setModalEliminar]       = useState(false);
   const [usuarioAEliminar, setUsuarioAEliminar] = useState<Usuario | null>(null);
   const [eliminando, setEliminando]             = useState(false);
+  const [usernameAdmin, setUsernameAdmin]       = useState("");
 
-  // Si no hay token redirige al login
+  // Si no hay token redirige al login, si hay decodifica el username
   useEffect(() => {
     if (!token) router.replace("/login" as any);
+    else {
+      try {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        setUsernameAdmin(payload.sub ?? "");
+      } catch {}
+    }
   }, [token]);
 
   const headers = {
@@ -262,6 +269,7 @@ export default function AdminPanel() {
         <View style={estilos.circulo2} />
         <View style={estilos.headerTop}>
           <View>
+            <Text style={estilos.saludo}>Hola, {usernameAdmin}</Text>
             <Text style={estilos.titulo}>Gestión de usuarios</Text>
             <Text style={estilos.subtitulo}>
               {usuariosFiltrados.length} de {usuarios.length} usuarios registrados
@@ -441,6 +449,7 @@ const estilos = StyleSheet.create({
   circulo1:   { position: "absolute", width: 180, height: 180, borderRadius: 90, backgroundColor: "rgba(255,255,255,0.08)", top: -50, right: -40 },
   circulo2:   { position: "absolute", width: 100, height: 100, borderRadius: 50, backgroundColor: "rgba(255,255,255,0.06)", bottom: -20, left: 20 },
   headerTop:  { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 },
+  saludo:     { fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: "500", marginBottom: 2 },
   titulo:     { fontSize: 24, fontWeight: "800", color: "#FFFFFF", marginBottom: 2 },
   subtitulo:  { fontSize: 13, color: "rgba(255,255,255,0.8)", fontWeight: "500" },
   botonSalir:      { backgroundColor: "rgba(255,255,255,0.2)", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "rgba(255,255,255,0.3)" },
